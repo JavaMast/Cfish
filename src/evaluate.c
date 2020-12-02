@@ -23,6 +23,7 @@
 #include "bitboard.h"
 #include "evaluate.h"
 #include "material.h"
+#include "uci.h"
 #ifdef NNUE
 #include "nnue.h"
 #endif
@@ -787,8 +788,9 @@ static Value evaluate_classical(const Position *pos)
   score += ei.pe->score;
 
   // Early exit if score is high
+int UseLazy = option_value(OPT_UseLazy);
 #define lazy_skip(v) (abs(mg_value(score) + eg_value(score)) / 2 > v + non_pawn_material() / 64)
-  if (lazy_skip(LazyThreshold1))
+  if (UseLazy && lazy_skip(LazyThreshold1))
     goto make_v;
 
   // Initialize attack and king safety bitboards.
@@ -816,7 +818,7 @@ static Value evaluate_classical(const Position *pos)
   score +=  evaluate_passed(pos, &ei, WHITE)
           - evaluate_passed(pos, &ei, BLACK);
 
-  if (lazy_skip(LazyThreshold2))
+  if (UseLazy && lazy_skip(LazyThreshold2))
     goto make_v;
 
   // Evaluate tactical threats, we need full attack information including king
