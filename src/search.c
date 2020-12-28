@@ -168,7 +168,6 @@ void search_clear(void)
     Position *pos = Threads.pos[idx];
     stats_clear(pos->counterMoves);
     stats_clear(pos->mainHistory);
-    stats_clear(pos->staticHistory);
     stats_clear(pos->captureHistory);
     stats_clear(pos->lowPlyHistory);
   }
@@ -913,12 +912,12 @@ INLINE Value search_node(Position *pos, Stack *ss, Value alpha, Value beta,
         eval);
   }
 
-  // Update static history for previous move
-  if (move_is_ok((ss-1)->currentMove) && !(ss-1)->checkersBB && !captured_piece()) {
-    int bonus =  ss->staticEval > -(ss-1)->staticEval + 2 * Tempo ? -stat_bonus(depth)
-               : ss->staticEval < -(ss-1)->staticEval + 2 * Tempo ? stat_bonus(depth)
-               : 0;
-    history_update(*pos->staticHistory, !stm(), (ss-1)->currentMove, bonus);
+  if (   move_is_ok((ss-1)->currentMove)
+      && !(ss-1)->checkersBB
+      && !captured_piece())
+  {
+    int bonus = clamp(-depth * 4 * ((ss-1)->staticEval + ss->staticEval - 2 * Tempo), -1000, 1000);
+    history_update(*pos->mainHistory, !stm(), (ss-1)->currentMove, bonus);
   }
 
   // Step 7. Razoring
@@ -1290,6 +1289,7 @@ moves_loop: // When in check search starts from here.
             || moveCountPruning
             || ss->staticEval + PieceValue[EG][captured_piece()] <= alpha
             || cutNode
+            || (!PvNode && !formerPv)
             || pos->ttHitAverage < 432 * ttHitAverageResolution * ttHitAverageWindow / 1024))
     {
       Depth r = reduction(improving, depth, moveCount);
@@ -1308,7 +1308,7 @@ moves_loop: // When in check search starts from here.
 
       // Increase reduction at root and non-PV nodes when the best move
       // does not change frequently
-      if ((rootNode || !PvNode) && depth > 10 && pos->bestMoveChanges <= 2)
+      if ((rootNode || !PvNode) && pos->rootDepth > 10 && pos->bestMoveChanges <= 2)
         r++;
 
       if (moveCountPruning && !formerPv)
