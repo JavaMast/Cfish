@@ -45,6 +45,7 @@ static bool TB_RootInTB, TB_UseRule50;
 static Depth TB_ProbeDepth;
 
 static int base_ct;
+static int dyn_ct;
 
 // Different node types, used as template parameter
 enum { NonPV, PV };
@@ -245,13 +246,23 @@ void mainthread_search(void)
 #endif
 
   base_ct = option_value(OPT_CONTEMPT) * PawnValueEg / 100;
+  dyn_ct = option_value(OPT_DYNAMIC_CT) * PawnValueEg / 100;
 
   const char *s = option_string_value(OPT_ANALYSIS_CONTEMPT);
   if (Limits.infinite || option_value(OPT_ANALYSE_MODE))
     base_ct =  strcmp(s, "off") == 0 ? 0
+             : strcmp(s, "both") == 0 ? base_ct
              : strcmp(s, "white") == 0 && us == BLACK ? -base_ct
              : strcmp(s, "black") == 0 && us == WHITE ? -base_ct
              : base_ct;
+
+  const char *sd = option_string_value(OPT_ANALYSIS_DYNAMIC);
+  if (Limits.infinite || option_value(OPT_ANALYSE_MODE))
+    dyn_ct =  strcmp(sd, "off") == 0 ? 0
+             : strcmp(sd, "both") == 0 ? dyn_ct
+             : strcmp(sd, "white") == 0 && us == BLACK ? -dyn_ct
+             : strcmp(sd, "black") == 0 && us == WHITE ? -dyn_ct
+             : dyn_ct;
 
   if (pos->rootMoves->size > 0) {
     Move bookMove = 0;
@@ -430,7 +441,11 @@ void thread_search(Position *pos)
       (MAX_LPH - 2) * sizeof((*pos->lowPlyHistory)[0]));
   memset(&((*pos->lowPlyHistory)[MAX_LPH - 2]), 0, 2 * sizeof((*pos->lowPlyHistory)[0]));
 
+  //char ICCF;
+  int ICCF = option_value(OPT_ICCF_Analyzes);
   int multiPV = option_value(OPT_MULTI_PV);
+  if (ICCF) multiPV = ((size_t)pow(2, ICCF));
+  if (option_value(OPT_WIDESEARCH)) multiPV=64;
 #if 0
   Skill skill(option_value(OPT_SKILL_LEVEL));
 
@@ -499,7 +514,8 @@ void thread_search(Position *pos)
         beta  = min(previousScore + delta,  VALUE_INFINITE);
 
         // Adjust contempt based on root move's previousScore
-        int ct = base_ct + (113 - base_ct / 2) * previousScore / (abs(previousScore) + 147);
+        int ct = dyn_ct + (dyn_ct ? (113 - dyn_ct / 2) * previousScore / (abs(previousScore) + 147) : 0);
+
         pos->contempt = stm() == WHITE ?  make_score(ct, ct / 2)
                                        : -make_score(ct, ct / 2);
       }
@@ -907,14 +923,14 @@ INLINE Value search_node(Position *pos, Stack *ss, Value alpha, Value beta,
              :  ss->staticEval > (ss-2)->staticEval;
 
   // Step 7. Futility pruning: child node
-  if (   !PvNode
+  if (  option_value(OPT_FUTILITY) && !PvNode
       &&  depth < 9
       &&  eval - futility_margin(depth, improving) >= beta
       &&  eval < VALUE_KNOWN_WIN)  // Do not return unproven wins
     return eval; // - futility_margin(depth); (do not do the right thing)
 
   // Step 8. Null move search with verification search (is omitted in PV nodes)
-  if (   !PvNode
+  if (  option_value(OPT_NULLMOVE) && !PvNode
       && (ss-1)->currentMove != MOVE_NULL
       && (ss-1)->statScore < 22977
       && eval >= beta
@@ -966,7 +982,7 @@ INLINE Value search_node(Position *pos, Stack *ss, Value alpha, Value beta,
   // Step 9. ProbCut
   // If we have a good enough capture and a reduced search returns a value
   // much above beta, we can (almost) safely prune the previous move.
-  if (   !PvNode
+  if (  option_value(OPT_PROBCUT) && !PvNode
       &&  depth > 4
       &&  abs(beta) < VALUE_TB_WIN_IN_MAX_PLY
       && !(   ss->ttHit
@@ -1110,7 +1126,7 @@ moves_loop: // When in check search starts from here.
     newDepth = depth - 1;
 
     // Step 12. Pruning at shallow depth
-    if (  !rootNode
+    if ( option_value(OPT_PRUNING) && !rootNode
         && non_pawn_material_c(stm())
         && bestValue > VALUE_TB_LOSS_IN_MAX_PLY)
     {
@@ -1252,7 +1268,7 @@ moves_loop: // When in check search starts from here.
 
     // Step 15. Reduced depth search (LMR). If the move fails high it will be
     // re-searched at full depth.
-    if (    depth >= 3
+    if (   option_value(OPT_LMR) && depth >= 3
         &&  moveCount > 1 + 2 * rootNode
         && (   !captureOrPromotion
             || moveCountPruning
@@ -1334,6 +1350,12 @@ moves_loop: // When in check search starts from here.
             && ss->staticEval + PieceValue[EG][captured_piece()] + 210 * depth <= alpha)
           r++;
       }
+
+      // The "Wide Search" option looks Engine to look at more positions per search depth, but Engine will play
+      // weaker overall.
+      int widesearch = option_value(OPT_WIDESEARCH);
+      if ( widesearch && ( ss->ply < depth / 2 - 1))
+        r = 0;
 
       Depth d = clamp(newDepth - r, 1, newDepth);
 
@@ -1699,6 +1721,12 @@ INLINE Value qsearch_node(Position *pos, Stack *ss, Value alpha, Value beta,
     undo_move(pos, move);
 
     assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
+
+    //Add a little variety to play
+    int variety;
+    variety = option_value(OPT_VARIETY);
+    if (bestValue + (variety * PawnValueEg / 100) >= 0 )
+      bestValue += rand() % (variety + 1);
 
     // Check for a new best move
     if (value > bestValue) {
